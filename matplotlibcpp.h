@@ -599,6 +599,38 @@ bool scatter2D(PyObject * ax, const std::vector<Numeric> &x, const std::vector<N
     return res;
 }
 
+template<typename Numeric>
+bool bar2D(PyObject * ax, const std::vector<Numeric> &x, const std::vector<Numeric> &y, std::string color)
+{
+    assert(x.size() == y.size());
+
+    // using numpy arrays
+    PyObject* xarray = detail::get_array(x);
+    PyObject* yarray = detail::get_array(y);
+
+    // construct positional args
+    PyObject* args = PyTuple_New(4);
+    PyTuple_SetItem(args, 0, xarray);
+    PyTuple_SetItem(args, 1, yarray);
+    PyTuple_SetItem(args, 2, PyFloat_FromDouble(0.7));
+    PyTuple_SetItem(args, 3, PyFloat_FromDouble(1.0));
+    
+
+    // construct keyword args
+    PyObject* kwargs = PyDict_New();
+    PyDict_SetItemString(kwargs, "color", PyUnicode_FromString(color.c_str()));
+
+    PyObject * theplot = PyObject_GetAttrString(ax, "bar");
+
+    PyObject* res = PyObject_Call(theplot, args, kwargs);
+
+    Py_DECREF(args);
+    Py_DECREF(kwargs);
+    if(res) Py_DECREF(res);
+
+    return res;
+}
+
 // TODO - it should be possible to make this work by implementing
 // a non-numpy alternative for `detail::get_2darray()`.
 #ifndef WITHOUT_NUMPY
