@@ -333,6 +333,33 @@ inline void backend(const std::string& name)
     detail::s_backend = name;
 }
 
+inline bool annotateGraph(PyObject * ax, std::string annotation, double x, double y)
+{
+    detail::_interpreter::get();
+
+    PyObject * xy = PyTuple_New(2);
+    PyObject * str = PyString_FromString(annotation.c_str());
+
+    PyTuple_SetItem(xy,0,PyFloat_FromDouble(x));
+    PyTuple_SetItem(xy,1,PyFloat_FromDouble(y));
+
+    PyObject* kwargs = PyDict_New();
+    PyDict_SetItemString(kwargs, "xy", xy);
+
+    PyObject* args = PyTuple_New(1);
+    PyTuple_SetItem(args, 0, str);
+
+    PyObject * writer = PyObject_GetAttrString(ax, "annotate");
+    PyObject * res = PyObject_Call(writer, args, kwargs);
+
+    Py_DECREF(args);
+    Py_DECREF(kwargs);
+
+    if(res) Py_DECREF(res);
+
+    return res;
+}
+
 inline bool annotate(std::string annotation, double x, double y)
 {
     detail::_interpreter::get();
@@ -583,6 +610,30 @@ bool scatter2D(PyObject * ax, const std::vector<Numeric> &x, const std::vector<N
     PyObject* args = PyTuple_New(2);
     PyTuple_SetItem(args, 0, xarray);
     PyTuple_SetItem(args, 1, yarray);
+
+    // construct keyword args
+    PyObject* kwargs = PyDict_New();
+    PyDict_SetItemString(kwargs, "color", PyUnicode_FromString(color.c_str()));
+
+    PyObject * theplot = PyObject_GetAttrString(ax, "scatter");
+
+    PyObject* res = PyObject_Call(theplot, args, kwargs);
+
+    Py_DECREF(args);
+    Py_DECREF(kwargs);
+    if(res) Py_DECREF(res);
+
+    return res;
+}
+
+
+bool scatter2DX(PyObject * ax, double x, double y, std::string color)
+{
+
+    // construct positional args
+    PyObject* args = PyTuple_New(2);
+    PyTuple_SetItem(args, 0, PyFloat_FromDouble(x));
+    PyTuple_SetItem(args, 1, PyFloat_FromDouble(y));
 
     // construct keyword args
     PyObject* kwargs = PyDict_New();
