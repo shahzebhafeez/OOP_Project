@@ -18,7 +18,8 @@ namespace plt = matplotlibcpp;
 using namespace boost::property_tree;
 
 std::string address(std::string ticker){
-    std::string url = "https://api.polygon.io/v2/aggs/ticker/" + ticker + "/range/1/day/2024-01-09/2024-09-07?adjusted=true&sort=asc&limit=300&apiKey=_qfnK4nx068Hwzfer53IJWlZ_YpF97cM";
+    std::string key = "";
+    std::string url = "https://api.polygon.io/v2/aggs/ticker/" + ticker + "/range/1/day/2024-01-09/2024-09-07?adjusted=true&sort=asc&limit=300&apiKey=" + key;
     return url;
 }
 
