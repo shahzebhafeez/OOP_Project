@@ -1,62 +1,113 @@
 #include <iostream>
 #include <string>
-#include <sstream>
-#include <thread> // for sleep_for
-#include <chrono> // for chrono literals   
-#include <curl/curl.h>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
-#include <vector>
 #include <map>
+#include <vector>
+#include <cpprest/ws_client.h>
+#include <sstream>
+#include <algorithm>
+#include <thread>
 #include <math.h>
 #include <cmath>
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/json_parser.hpp>
 #include <Python.h>
 #include "matplotlibcpp.h"
 
-namespace plt = matplotlibcpp;
-
+using namespace web;
+using namespace web::websockets::client;
 using namespace boost::property_tree;
 
-std::string address(std::string ticker){
-    std::string key = "";
-    std::string url = "https://api.polygon.io/v2/aggs/ticker/" + ticker + "/range/1/day/2024-01-09/2024-09-07?adjusted=true&sort=asc&limit=300&apiKey=" + key;
-    return url;
+namespace plt = matplotlibcpp;
+
+
+std::string JoinTicks(std::vector<std::string> tickers){
+    std::string result = "[";
+    for(auto & tick : tickers){
+        result += "\"" + tick + "\",";
+    }
+    result.pop_back();
+    result += "]";
+    return result;
 }
 
-size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* response) {
-    size_t totalSize = size * nmemb;
-    response->append((char*)contents, totalSize);
-    return totalSize;
+std::string BuildMsg(std::map<std::string, std::string> the_input){
+    std::string result = "{";
+    for(auto & entry : the_input){
+        result += "\"" + entry.first + "\":\"" + entry.second + "\",";
+    }
+    result.pop_back();
+    result += "}";
+    return result;
 }
 
-std::string RequestData(const std::string& url) {
-    CURL* curl;
-    CURLcode res;
-    std::string response;
-
-    curl = curl_easy_init(); // Initialize CURL
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str()); // Set the URL
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback); // Set the callback function
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response); // Pass the response string to the callback
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // Follow redirects if necessary
-
-        // Perform the request
-        res = curl_easy_perform(curl);
-        
-        // Check for errors
-        if(res != CURLE_OK) {
-            std::cerr << "CURL request failed: " << curl_easy_strerror(res) << std::endl;
+void Hurricane(std::string message, std::map<std::string, double> & priceData){
+    ptree data;
+    std::stringstream ss(message);
+    read_json(ss, data);
+    bool goPrice = false;
+    for(ptree::const_iterator it = data.begin(); it != data.end(); ++it){
+        std::string ticker = "";
+        double currentPrice = 0;
+        for(ptree::const_iterator jt = it->second.begin(); jt != it->second.end(); ++jt){
+            if(goPrice == true){
+                if(jt->first == "S"){
+                    ticker = jt->second.get_value<std::string>();
+                }
+                if(jt->first == "p"){
+                    currentPrice = atof(jt->second.get_value<std::string>().c_str());
+                    goPrice = false;
+                }
+            }
+            if(jt->first == "T"){
+                if(jt->second.get_value<std::string>() == "t"){
+                    goPrice = true;
+                }
+            }
         }
+        priceData[ticker] = currentPrice;
+    }
+}
 
-        // Cleanup
-        curl_easy_cleanup(curl);
+static void Socket(std::vector<std::string> tickers, std::map<std::string, double> & priceData){
+
+    std::string ticklist = JoinTicks(tickers);
+    std::string url = "wss://stream.data.alpaca.markets/v2/iex";
+    
+    // ALPACA API KEY AND SECRET
+    std::map<std::string, std::string> auth = {
+        {"action", "auth"},
+        {"key", ""},
+        {"secret",""}
+    };
+    
+    std::string authenticate = BuildMsg(auth);
+    std::string message = "{\"action\":\"subscribe\", \"trades\":" + ticklist + "}";
+    
+    websocket_client client;
+    client.connect(url).wait();
+
+    websocket_outgoing_message outmsg;
+    outmsg.set_utf8_message(authenticate);
+    client.send(outmsg);
+
+    outmsg.set_utf8_message(message);
+    client.send(outmsg);
+
+    while(true){
+        client.receive().then([](websocket_incoming_message inmsg){
+            return inmsg.extract_string();
+        }).then([&](std::string message){
+            std::cout << message << std::endl;
+            Hurricane(message, std::ref(priceData));
+        }).wait();
+
     }
 
-    return response; // Return the response
+    client.close().wait();
+    
 }
 
-std::vector<double> ROR(std::vector<double> x){
+std::vector<double> RateOfReturn(std::vector<double> x){
     std::vector<double> y;
     for(int i = 1; i < x.size(); ++i){
         y.push_back(x[i]/x[i-1] - 1.0);
@@ -64,93 +115,105 @@ std::vector<double> ROR(std::vector<double> x){
     return y;
 }
 
-std::map<std::string, std::vector<double>> ImportHistoricalData(std::vector<std::string> tickers){
-    std::map<std::string, std::vector<double>> result;
-    std::cout << "Stock data is loading" << std::endl;
-    for(auto & stock : tickers){
-        std::this_thread::sleep_for(std::chrono::seconds(10));
-        std::cout << stock << " is imported" << std::endl;
-        std::string response = RequestData(address(stock));
-        ptree data;
-        std::stringstream ss(response);
-        read_json(ss, data);
-        for(ptree::const_iterator it = data.begin(); it != data.end(); ++it){
-            if(it->first == "results"){
-                for(ptree::const_iterator jt = it->second.begin(); jt != it->second.end(); ++jt){
-                    for(ptree::const_iterator kt = jt->second.begin(); kt != jt->second.end(); ++kt){
-                        if(kt->first == "l"){
-                            result[stock].push_back(atof(kt->second.get_value<std::string>().c_str()));
-                        }
-                    }
-                }
-            }
-        }
+std::vector<double> MuSd(std::vector<double> x){
+    std::vector<double> result;
+    double average = 0, stdev = 0;
+    int N = x.size();
+    for(auto & i : x){
+        average += i;
     }
+    average /= (double) N;
+    for(auto & i : x){
+        stdev += pow(i - average, 2);
+    }
+    stdev /= (double) (N - 1);
+    stdev = pow(stdev, 0.5);
+    result.push_back(stdev);
+    result.push_back(average);
 
     return result;
 }
 
-double Average(std::vector<double> x){
-    double total = 0;
-    for(auto & i : x){
-        total += i;
-    }
-    total /= (double) x.size();
-    return total;
-}
+double HurstExponent(std::vector<double> stats, std::vector<double> returns){
+    double result = 0;
+    int N = returns.size();
 
-double StandardDeviation(std::vector<double> x){
-    double total = 0;
-    double mu = Average(x);
-    for(int i = 0; i < x.size(); ++i){
-        total += pow(x[i] - mu, 2);
-    }
-    total /= ((double) x.size() - 1);
-    total = pow(total, 0.5);
-    return total;
-}
-
-double hurstExponent(std::vector<double> stockData){
-    int N = stockData.size();
+    double csum = 0;
     std::vector<double> Y;
-    double xmu = Average(stockData);
-    double y = 0;
     for(int i = 0; i < N; ++i){
-        y += (stockData[i] - xmu);
-        Y.push_back(y);
+        csum += returns[i];
+        Y.push_back(csum - stats[1]);
     }
-    std::sort(Y.begin(), Y.end());
-    double R = Y[N - 1] - Y[0];
-    double S = StandardDeviation(stockData);
-    return log(R/S)/log(N);
 
+    std::sort(Y.begin(), Y.end());
+    double minY = Y[0];
+    double maxY = Y[Y.size() - 1];
+    
+    result = log((maxY - minY)/stats[0])/log(N);
+
+    return result;
 }
 
-int main()
-{
+int main(){
 
     PyObject * ax = plt::chart2D(111);
 
-    std::vector<std::string> tickers = {"NVDA","MSFT","AAPL","AMZN","META","GOOGL","IBM", "GS", "JPM", "MS"};
+    std::vector<std::string> stocks = {"SPY","NVDA","MSFT","AAPL","GOOGL","JPM","MS","AMZN"};
+    std::map<std::string, double> priceData;
+    std::map<std::string, std::vector<double>> history;
 
-    std::map<std::string, std::vector<double>> df = ImportHistoricalData(tickers);
+    std::thread WebSocket(Socket, stocks, std::ref(priceData));
+    int limit = 2;
+    bool checkOn = false;
+
+    std::vector<double> xp, yp, ror, musd;
+    std::vector<std::string> lp, color;
     
-    for(auto & ticker : tickers){
-        std::vector<double> rate_of_return = ROR(df[ticker]);
-        double hexp = hurstExponent(rate_of_return);
-        double risk_ = StandardDeviation(rate_of_return);
-        double reward_ = Average(rate_of_return);
-        if(hexp == 0.5){
-            plt::scatter2DX(ax, risk_, reward_, "black");
-        } else if(hexp < 0.5) {
-            plt::scatter2DX(ax, risk_, reward_, "red");
-        } else {
-            plt::scatter2DX(ax, risk_, reward_, "blue");
+
+    while(true){
+        int SN = stocks.size();
+        int SO = priceData.size();
+        if(SN <= SO){
+            xp.clear();
+            yp.clear();
+            lp.clear();
+            ror.clear();
+            musd.clear();
+            color.clear();
+            plt::Clear3DChart(ax);
+            for(auto & stock : stocks){
+                std::cout << stock << std::endl;
+                history[stock].push_back(priceData[stock]);
+                if(history[stock].size() > 1){
+                    ror = RateOfReturn(history[stock]);
+                    musd = MuSd(ror);
+                    double hexp = HurstExponent(musd, ror);
+                    xp.push_back(musd[0]);
+                    yp.push_back(musd[1]);
+                    if(hexp > 0.5){
+                        lp.push_back(stock + " Trending");
+                        color.push_back("green");
+                    } else if(hexp < 0.5) {
+                        lp.push_back(stock + " Mean-Reverting");
+                        color.push_back("blue");
+                    } else {
+                        lp.push_back(stock + " Effecient");
+                        color.push_back("red");
+                    }
+                }
+            }
+            
+            for(int k = 0; k < lp.size(); ++k){
+                plt::scatter2DX(ax, xp[k], yp[k], color[k]);
+                plt::annotateGraph(ax, lp[k], xp[k], yp[k]);
+            }
+            plt::pause(2);
+        } else {    
+            std::cout << SN - SO << " left to load" << std::endl;
+            
         }
-        plt::annotateGraph(ax, ticker, risk_, reward_);
     }
-    
-    plt::show();
 
+    WebSocket.join();
     return 0;
 }
